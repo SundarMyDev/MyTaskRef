@@ -42,39 +42,54 @@ BEGIN
                     (r.Player1ID = tm.Player1ID AND r.Player2ID = tm.Player2ID)
                  OR (r.Player1ID = tm.Player2ID AND r.Player2ID = tm.Player1ID)
                  )
-        /* If your results table doesn’t have Player1ID/Player2ID, replace the join with:
-           FROM fx
-           JOIN dbo.Basketball_FixtureResults r ON r.FixtureID = fx.FixtureID
-        */
     )
     SELECT
         tm.Team1Name,
         tm.Team2Name,
 
-        /* Step 3A: player ELO + matches (joined twice for clarity & perf) */
-        ISNULL(p1.ELORating, 0)               AS Team1Elo,
-        ISNULL(p2.ELORating, 0)               AS Team2Elo,
-        ISNULL(p1.FixtureCount, 0)            AS Team1Matches,
-        ISNULL(p2.FixtureCount, 0)            AS Team2Matches,
+        /* ELO + player total matches (rounded ELOs) */
+        ROUND(ISNULL(p1.ELORating, 0), 2)               AS Team1Elo,
+        ROUND(ISNULL(p2.ELORating, 0), 2)               AS Team2Elo,
+        ISNULL(p1.FixtureCount, 0)                      AS Team1Matches,
+        ISNULL(p2.FixtureCount, 0)                      AS Team2Matches,
 
-        /* Step 3: matchup metrics (order-agnostic, latest by UpdatedDateTime) */
-        ISNULL(mu.H2HCount, 0)                AS H2HCount,
-        lh.LastH2HDate                        AS LastH2HDate,
-        ISNULL(mu.MatchUpAvgTotalPtsLong, 0)  AS Past30H2HAvg,
-        ISNULL(mu.MatchUpAvgTotalPtsShort, 0) AS Past5H2HAvg,
+        /* NEW: Player–Team Combo #matches (per player, per team) */
+        ISNULL(pt1.FixtureCount, 0)                     AS Team1PlayerTeamMatches,
+        ISNULL(pt2.FixtureCount, 0)                     AS Team2PlayerTeamMatches,
+
+        /* Matchup metrics (latest row) */
+        ISNULL(mu.H2HCount, 0)                          AS H2HCount,
+        lh.LastH2HDate                                  AS LastH2HDate,
+        ROUND(ISNULL(mu.MatchUpAvgTotalPtsLong, 0), 2)  AS Past30H2HAvg,
+        ROUND(ISNULL(mu.MatchUpAvgTotalPtsShort, 0), 2) AS Past5H2HAvg,
 
         /* optional diagnostics */
         tm.LeagueCode,
         tm.Player1ID,
         tm.Player2ID
     FROM teams tm
-    /* Ratings (player-level), joined twice instead of pivoting */
+
+    /* Ratings (player-level), joined twice */
     LEFT JOIN dbo.Basketball_Ratings_Player AS p1
            ON p1.LeagueCode = tm.LeagueCode
           AND p1.RatingID   = tm.Player1ID
     LEFT JOIN dbo.Basketball_Ratings_Player AS p2
            ON p2.LeagueCode = tm.LeagueCode
           AND p2.RatingID   = tm.Player2ID
+
+    /* NEW: Player–Team combo table, joined twice
+       Expected columns: PlayerID, TeamID, FixtureCount (and optionally LeagueCode)
+       If your table uses RatingID to reference the team side, see the commented line below. */
+    LEFT JOIN dbo.basketball_ratings_player_team AS pt1
+           ON pt1.PlayerID = tm.Player1ID
+          AND pt1.TeamID   = tm.Team1TeamID
+          -- AND pt1.LeagueCode = tm.LeagueCode     -- uncomment if exists
+          -- AND pt1.RatingID   = tm.Team1TeamID    -- alternative if TeamID not present
+    LEFT JOIN dbo.basketball_ratings_player_team AS pt2
+           ON pt2.PlayerID = tm.Player2ID
+          AND pt2.TeamID   = tm.Team2TeamID
+          -- AND pt2.LeagueCode = tm.LeagueCode
+          -- AND pt2.RatingID   = tm.Team2TeamID
 
     /* Latest matchup row via CROSS APPLY (order-agnostic P1/P2) */
     OUTER APPLY (
@@ -92,7 +107,7 @@ BEGIN
         ORDER BY m.UpdatedDateTime DESC
     ) AS mu
 
-    /* Latest H2H date (single value CTE) */
+    /* Latest H2H date (single-value CTE) */
     LEFT JOIN last_h2h AS lh ON 1 = 1;
 END
 GO
