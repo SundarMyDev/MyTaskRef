@@ -1,4 +1,5 @@
-CREATE OR ALTER PROCEDURE dbo.usp_Update_AfterScore_To_AfterTime
+CREATE OR ALTER PROCEDURE dbo.usp_Update_AfterScore_To_AfterTime_ByPlbtId
+    @PlbtId INT = NULL  -- if provided, only updates that plbtid; if NULL, updates all matching rows
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -7,47 +8,85 @@ BEGIN
         BEGIN TRAN;
 
         -----------------------------------------------------------------------
-        -- 1) Capture the irt rows we’re going to change (by textid) into a table variable
+        -- 1) Track changes for irt
         -----------------------------------------------------------------------
-        DECLARE @AffectedIrt TABLE (textid INT PRIMARY KEY);
+        DECLARE @IrtChanges TABLE
+        (
+            textid       INT         NOT NULL,
+            plbtid       INT         NOT NULL,
+            OriginalText NVARCHAR(MAX) NULL,
+            UpdatedText  NVARCHAR(MAX) NULL
+        );
 
-        -- Update irt.[text] only where:
-        --   - it contains '/'
-        --   - plbtid in (1,2,3)
-        --   - and contains the phrase 'After Score'
-        -- Also, record textid of the rows actually changed in @AffectedIrt
         UPDATE i
             SET [text] = REPLACE(i.[text], 'After Score', 'After Time')
-        OUTPUT inserted.textid
-            INTO @AffectedIrt(textid)
+        OUTPUT
+            inserted.textid,
+            inserted.plbtid,
+            deleted.[text]      AS OriginalText,
+            inserted.[text]     AS UpdatedText
+        INTO @IrtChanges(textid, plbtid, OriginalText, UpdatedText)
         FROM irt AS i
-        WHERE i.plbtid IN (1,2,3)
-          AND i.[text] LIKE '%/%'
+        WHERE (@PlbtId IS NULL OR i.plbtid = @PlbtId)
           AND i.[text] LIKE '%After Score%';
 
         -----------------------------------------------------------------------
-        -- 2) Update mlt for ONLY those textids affected above and mllanguageid = 1
-        --    Replace 'After Score' -> 'After Time' in mlpartcode
+        -- 2) Track changes for mlt (join rule: mlt.mltextid = irt.plbtid; language = 1)
         -----------------------------------------------------------------------
+        DECLARE @MltChanges TABLE
+        (
+            mltextid     INT         NOT NULL,
+            plbtid       INT         NOT NULL,
+            OriginalText NVARCHAR(MAX) NULL,
+            UpdatedText  NVARCHAR(MAX) NULL
+        );
+
         UPDATE m
             SET m.mlpartcode = REPLACE(m.mlpartcode, 'After Score', 'After Time')
+        OUTPUT
+            inserted.mltextid,
+            i.plbtid,
+            deleted.mlpartcode  AS OriginalText,
+            inserted.mlpartcode AS UpdatedText
+        INTO @MltChanges(mltextid, plbtid, OriginalText, UpdatedText)
         FROM mlt AS m
-        INNER JOIN @AffectedIrt AS a
-            ON a.textid = m.mltextid
+        INNER JOIN irt AS i
+            ON m.mltextid = i.plbtid
         WHERE m.mllanguageid = 1
+          AND (@PlbtId IS NULL OR i.plbtid = @PlbtId)
           AND m.mlpartcode LIKE '%After Score%';
 
         COMMIT TRAN;
 
-        -- Optional: return counts for visibility
-        SELECT
-            (SELECT COUNT(*) FROM @AffectedIrt) AS UpdatedIrtRowCount;
+        -----------------------------------------------------------------------
+        -- 3) FINAL RESULTSET:
+        --    Distinct rows across BOTH updates with:
+        --    plbtid, currenttext (before), newtext (after)
+        -----------------------------------------------------------------------
+        SELECT DISTINCT
+            r.plbtid,
+            r.CurrentText_Before AS currenttext,
+            r.NewText_After      AS newtext
+        FROM (
+            SELECT plbtid,
+                   OriginalText AS CurrentText_Before,
+                   UpdatedText  AS NewText_After
+            FROM @IrtChanges
+            UNION ALL
+            SELECT plbtid,
+                   OriginalText,
+                   UpdatedText
+            FROM @MltChanges
+        ) AS r
+        ORDER BY r.plbtid, r.CurrentText_Before;
+
+        -- If you also want to see what exactly changed per table, uncomment:
+        -- SELECT * FROM @IrtChanges ORDER BY plbtid, textid;
+        -- SELECT * FROM @MltChanges ORDER BY plbtid, mltextid;
 
     END TRY
     BEGIN CATCH
         IF XACT_STATE() <> 0 ROLLBACK TRAN;
-
-        -- Bubble the error
         THROW;
     END CATCH
 END;
