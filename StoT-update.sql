@@ -117,3 +117,37 @@ WHERE i.plbtid = 1
 SELECT * FROM @IrtChanges;
 
 -------------------------------------------------------------------------
+
+
+-- Track changes for MLT
+DECLARE @MltChanges TABLE
+(
+    mltextid     INT           NOT NULL,
+    plbtid       INT           NOT NULL,
+    OriginalText NVARCHAR(MAX) NULL,
+    UpdatedText  NVARCHAR(MAX) NULL
+);
+
+UPDATE m
+SET m.mlpartcode = REPLACE(CAST(m.mlpartcode AS NVARCHAR(MAX)), 'After Score', 'After Time')
+OUTPUT 
+    inserted.mltextid,
+    i.plbtid,
+    CAST(deleted.mlpartcode AS NVARCHAR(MAX))  AS OriginalText,
+    CAST(inserted.mlpartcode AS NVARCHAR(MAX)) AS UpdatedText
+INTO @MltChanges (mltextid, plbtid, OriginalText, UpdatedText)
+FROM mlt AS m
+INNER JOIN irt AS i
+    ON m.mltextid = i.plbtid
+WHERE i.plbtid = 1                  -- your plbtid filter
+  AND m.mllanguageid = 1            -- language filter
+  AND CAST(m.mlpartcode AS NVARCHAR(MAX)) LIKE '%After Score%';
+
+-- Distinct rows changed in MLT
+SELECT DISTINCT
+    plbtid,
+    OriginalText,
+    UpdatedText
+FROM @MltChanges
+ORDER BY plbtid, OriginalText;
+
