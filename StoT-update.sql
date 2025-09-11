@@ -91,3 +91,29 @@ BEGIN
     END CATCH
 END;
 GO
+
+------------------------------------------------------------
+    
+DECLARE @IrtChanges TABLE
+(
+    textid       INT           NOT NULL,
+    plbtid       INT           NOT NULL,
+    OriginalText NVARCHAR(MAX) NULL,
+    UpdatedText  NVARCHAR(MAX) NULL
+);
+
+UPDATE i
+SET [text] = REPLACE(CAST(i.[text] AS NVARCHAR(MAX)), 'After Score', 'After Time')
+OUTPUT 
+    inserted.textid,
+    inserted.plbtid,
+    CAST(deleted.[text] AS NVARCHAR(MAX)) AS OriginalText,
+    CAST(inserted.[text] AS NVARCHAR(MAX)) AS UpdatedText
+INTO @IrtChanges (textid, plbtid, OriginalText, UpdatedText)
+FROM irt AS i
+WHERE i.plbtid = 1
+  AND CAST(i.[text] AS NVARCHAR(MAX)) LIKE '%After Score%';
+
+SELECT * FROM @IrtChanges;
+
+-------------------------------------------------------------------------
